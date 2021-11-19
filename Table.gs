@@ -4,7 +4,7 @@ const FIRST_CONTEST_COLUMN = "H";
 
 const TABLE_NAME = "Группа - 5 - export";
 
-const Status = { SOLVED: 1, RESOLVED: 0.99, REJECT: "-", WAITING: "?" };
+const Status = { BONUS: 2, SOLVED: 1, RESOLVED: 0.99, REJECT: "-", WAITING: "?" };
 
 const SUBMISSION_ID_RANGE = "SubmissionsId";
 const CONTEST_ID_RANGE = "ContestsId";
@@ -91,13 +91,13 @@ class ContestRow {
   build() {
     this.cells = {}
     
-    for (var i = 0; i < this.contest.problems.length; i++) {
-      this.cells[this.contest.problems[i].index] = {status: null, submissionId: null};
+    var problems = this.contest.problems;
+    for (var i = 0; i < problems.length; i++) {
+      this.cells[problems[i].index] = {status: null, submissionId: null};
     }
 
-    var submissions = this.contest.submissions.filter(e => e.author.members[0].handle == this.handle)
-
     // toDo => sort?
+    var submissions = this.contest.submissions.filter(e => e.author.members[0].handle == this.handle)
     for (var j = 0; j < submissions.length; j++) {
       var submission = submissions[j];
 
@@ -107,7 +107,7 @@ class ContestRow {
 
       var submissionId = this.cells[submission.problem.index].submissionId;
       var status = this.cells[submission.problem.index].status;
-      var newStatus = getProblemStatus(submission, this.contest.durationSeconds);
+      var newStatus = this.contest.getProblemStatus(submission);
 
       if (newStatus == Status.REJECT) {
         status = newStatus;
@@ -153,7 +153,6 @@ class Contest {
     this.handles = [];
     contestData.result.rows.forEach((e) => this.handles.push(e.party.members[0].handle));
     
-
     this.contestRows = [];
     for (var i = 0; i < this.handles.length; i++) {
       var handle = this.handles[i];
@@ -161,27 +160,26 @@ class Contest {
       this.contestRows.push(new ContestRow(this, handle));
     }
   }
-}
 
-function getProblemStatus(submission, contestDuration) {
-  if (submission.verdict == "SKIPPED" || submission.verdict == "REJECTED") {
-    return Status.REJECT;
-  }
-
-  var status;
-  if (submission.verdict == "OK") {
-    if (submission.relativeTimeSeconds <= contestDuration) {
-      status = Status.SOLVED;
-    } else {
-      status = Status.RESOLVED;
+  getProblemStatus(submission) {
+    if (submission.verdict == "SKIPPED" || submission.verdict == "REJECTED") {
+      return Status.REJECT;
     }
-  } else {
-    status = null;
+
+    var status;
+    if (submission.verdict == "OK") {
+      if (submission.relativeTimeSeconds <= this.durationSeconds) {
+        status = Status.SOLVED;
+      } else {
+        status = Status.RESOLVED;
+      }
+    } else {
+      status = null;
+    }
+
+    return status;
   }
-
-  return status;
 }
-
 
 function getContestSubmissions(contestId) {
   var method = "contest.status";
