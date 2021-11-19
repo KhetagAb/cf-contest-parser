@@ -1,70 +1,76 @@
 const CONTEST_TITLE = 3;
-const FIRST_CONTEST_COLUMN = "J";
 const FIRST_CONTEST_ROW = 5;
+const FIRST_CONTEST_COLUMN = "H";
 
-const TABLE_NAME = "Результаты"
+const TABLE_NAME = "Группа - 5 - export";
 
-// NamedRanges
-const CONTEST_LIST = "ContestsList";
-const HANDLES = "Handles";
+const Status = { SOLVED: 1, RESOLVED: 0.99, REJECT: "-", WAITING: "?" };
 
-// Codeforces API Secrets
-var key = "xxx";
-var secret = "yyy";
+const SUBMISSION_ID_RANGE = "SubmissionsId";
+const CONTEST_ID_RANGE = "ContestsId";
+const CONTEST_ID_REVIEW_RANGE = "ContestsIdReview";
+const HANDLES_RANGE = "Handles";
+const LAST_WEEK_RANGE = "LastWeek"
+
+const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+const reviewedSubmissionIds = getValuesByRangeName(spreadsheet, SUBMISSION_ID_RANGE);
 
 function getAllResults() {
-  var allContests = getValuesByRangeName(CONTEST_LIST);
-  var handles = getValuesByRangeName(HANDLES);
-
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TABLE_NAME);
-  if (sheet == null) {
-    throw new Error("Cannot find sheet: " + TABLE_NAME)
+  if (spreadsheet == null) {
+    throw new Error("Cannot find spreadsheet.")
   }
+
+  var handles = getValuesByRangeName(spreadsheet, HANDLES_RANGE);
+  var contestsWithoutReview = getValuesByRangeName(spreadsheet, CONTEST_ID_RANGE)
+    .map(e => { return {contest: new Contest(e), review: false}});
+  var contestsWithReview = getValuesByRangeName(spreadsheet, CONTEST_ID_REVIEW_RANGE)
+    .map(e => { return {contest: new Contest(e), review: true}});
+  var contests = contestsWithReview.concat(contestsWithoutReview)
+    .sort((a, b) => a.contest.startTimeSeconds - b.contest.startTimeSeconds).reverse();
 
   var pointerFrom = FIRST_CONTEST_COLUMN.charCodeAt(0) - "A".charCodeAt(0) + 1;
-  for (var i = 0; i < allContests.length; i++) {
-    pointerFrom = displayContest(sheet, new Contest(allContests[i]), handles, pointerFrom);
+  for (var i = 0; i < contests.length; i++) {
+    pointerFrom = displayContest(spreadsheet.getSheetByName(TABLE_NAME), contests[i], handles, pointerFrom);
   }
+  
+  var lastWeek = getTable(contests[0], handles).map(e => [e.reduce((a, b) => a + (typeof b == 'number' ? b : 0), 0)]);
+  SpreadsheetApp.getActive().getRangeByName(LAST_WEEK_RANGE).setValues(lastWeek);
 }
 
-function displayContest(sheet, contest, handles, pointerFrom) {
-  var problems = contest.problems.map(e => e.index);
+function displayContest(sheet, contestEntity, handles, pointerFrom) {
+  var problemsIndex = contestEntity.contest.problems.map(e => e.index);
 
-  sheet.getRange(CONTEST_TITLE, pointerFrom, 1, problems.length).setValues([problems]);
+  sheet.getRange(CONTEST_TITLE, pointerFrom, 1, problemsIndex.length).setValues([problemsIndex]);
+  sheet.getRange(CONTEST_TITLE - 1, pointerFrom, 1, problemsIndex.length).breakApart().merge().setValue(contestEntity.contest.name);
 
-  sheet.getRange(CONTEST_TITLE - 1, pointerFrom, 1, problems.length).merge().setValue(contest.name);
+  var table = getTable(contestEntity, handles);
+
+  sheet.getRange(FIRST_CONTEST_ROW, pointerFrom, handles.length, problemsIndex.length)
+    .setValues(table);
+  sheet.getRange(CONTEST_TITLE - 1, pointerFrom, handles.length + 3, problemsIndex.length)
+    .setBorder(null, null, null, true, false, false, "black", SpreadsheetApp.BorderStyle.DOUBLE);
+  sheet.getRange(CONTEST_TITLE - 1, pointerFrom, 2, problemsIndex.length)
+    .setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.DOUBLE);
+
+  return pointerFrom + problemsIndex.length;
+}
+
+function getTable(contestEntity, handles) {
+  var review = contestEntity.review;
+  var contest = contestEntity.contest;
+  var problems = contest.problems;
+  var contestRows = contest.contestRows;
 
   var table = [];
-  var contestRows = contest.contestRows;
   for (var i = 0; i < handles.length; i++) {
-    var handle = handles[i];
-
-    var handlerValues;
-    if (contestRows[handle] == null) {
-      handlerValues = new Array(problems.length).fill("0");
+    var contestRow = contestRows.find(e => e.handle === handles[i]);
+    if (contestRow === undefined) {
+      table.push(new Array(problems.length).fill("0"));
     } else {
-      handlerValues = Object.values(contest.contestRows[handles[i]].getSubmissions());
+      table.push(contestRow.getSubmissions(review));
     }
-
-    table.push(handlerValues);
   }
-
-  sheet.getRange(FIRST_CONTEST_ROW, pointerFrom, handles.length, problems.length).setValues(table);
-  sheet.getRange(CONTEST_TITLE - 1, pointerFrom, handles.length + 3, problems.length).setBorder(null, null, null, true, false, false, "black", SpreadsheetApp.BorderStyle.DOUBLE);
-  sheet.getRange(CONTEST_TITLE - 1, pointerFrom, 2, problems.length).setBorder(true, true, true, true, true, true, "black", SpreadsheetApp.BorderStyle.DOUBLE);
-
-  return pointerFrom + problems.length;
-}
-
-function getValuesByRangeName(rangeName) {
-  var range, values;
-  try {
-    range = SpreadsheetApp.getActive().getRangeByName(rangeName);
-    values = range.getValues();
-  } catch (err) {
-    throw new Error("Cannot find or access to named range " + rangeName);
-  }
-  return values.reduce((head, tail) => head.concat(tail)).filter(Boolean);
+  return table
 }
 
 class Problem {
@@ -76,22 +82,57 @@ class Problem {
 }
 
 class ContestRow {
-  constructor (contestId) {
-    this.contestId = contestId;
-
-    this.problems = {}
+  constructor (contest, handle) {
+    this.handle = handle;
+    this.contest = contest;
+    this.build();
   }
 
-  addSubmission(problem, status) {
-    if (this.contestId != problem.contestId) {
-      throw new Error("Try to add problem " + problem + " from contest " + problem.contestId + " to contest " + this.contestId);
+  build() {
+    this.cells = {}
+    
+    for (var i = 0; i < this.contest.problems.length; i++) {
+      this.cells[this.contest.problems[i].index] = {status: null, submissionId: null};
     }
 
-    this.problems[problem.index] = getActualStatus(this.problems[problem.index], status);
+    var submissions = this.contest.submissions.filter(e => e.author.members[0].handle == this.handle)
+
+    // toDo => sort?
+    for (var j = 0; j < submissions.length; j++) {
+      var submission = submissions[j];
+
+      if (this.contest.contestId != submission.problem.contestId) {
+        throw new Error("Try to add problem " + submission.problem + " from contest " + submission.problem.contestId + " to contest " + this.contest.id);
+      }
+
+      var submissionId = this.cells[submission.problem.index].submissionId;
+      var status = this.cells[submission.problem.index].status;
+      var newStatus = getProblemStatus(submission, this.contest.durationSeconds);
+
+      if (newStatus == Status.REJECT) {
+        status = newStatus;
+        submissionId = submission.id;
+      } else if (newStatus != null && status != Status.SOLVED) {
+        status = newStatus;
+        submissionId = submission.id;
+      }
+
+      this.cells[submission.problem.index] = {status: status, submissionId: submissionId};
+    }
   }
 
-  getSubmissions() {
-    return this.problems;
+  getSubmissions(review) {
+    var problems = Object.values(this.cells);
+
+    var result = problems.map(function(e) {
+      if (review && e.status == Status.SOLVED && !reviewedSubmissionIds.includes(e.submissionId)) {
+        return Status.WAITING;
+      } else {
+        return e.status;
+      }
+    });
+
+    return result;
   }
 }
 
@@ -102,83 +143,90 @@ class Contest {
   }
 
   build() {
-    var contestData = getContestStandingsData(this.contestId);
+    var contestData = getContestStandings(this.contestId);
+
+    this.submissions = getContestSubmissions(this.contestId);
     this.name = contestData.result.contest.name;
     this.durationSeconds = contestData.result.contest.durationSeconds;
-
+    this.startTimeSeconds = contestData.result.contest.startTimeSeconds;
     this.problems = contestData.result.problems.map(e => new Problem(this.contestId, e.index, e.name));
+    this.handles = [];
+    contestData.result.rows.forEach((e) => this.handles.push(e.party.members[0].handle));
+    
 
-    this.contestRows = {};
-    for (var i = 0; i < contestData.result.rows.length; i++) {
-      var row = contestData.result.rows[i];
-      var handle = row.party.members[0].handle;
+    this.contestRows = [];
+    for (var i = 0; i < this.handles.length; i++) {
+      var handle = this.handles[i];
 
-      for (var j = 0; j < row.problemResults.length; j++) {
-        var problemData = row.problemResults[j];
-
-        var status = getProblemStatus(problemData.points, problemData.bestSubmissionTimeSeconds, this.durationSeconds);
-
-        if (this.contestRows[handle] == null) {
-          this.contestRows[handle] = new ContestRow(this.contestId);
-        }
-
-        this.contestRows[handle].addSubmission(this.problems[j], status);
-      }
+      this.contestRows.push(new ContestRow(this, handle));
     }
   }
 }
 
-function getContestStandingsData(contestId) {
-  var method = "contest.standings";
-  var params = [["contestId", contestId], ["showUnofficial", "true"]];
-
-  try {
-    var HTTPResponse = authorizedRequest(method, params);
-    var standings = JSON.parse(HTTPResponse.getContentText());
-
-    if (standings.status != "OK") {
-      throw new Error("Status of getting " + contestId + " contest isn't OK: " + standings.status);
-    }
-  } catch (e) {
-    Logger.log("Cannot get contest data: " + e);
-    ContentService.createTextOutput("Cannot get contest data." + e);
-    throw e;
+function getProblemStatus(submission, contestDuration) {
+  if (submission.verdict == "SKIPPED" || submission.verdict == "REJECTED") {
+    return Status.REJECT;
   }
 
-  return standings;
-}
-
-const Status = { SOLVED: 1, RESOLVED: 0.8, UNRESOLVED: "" };
-function getProblemStatus(points, submissionTime, contestDuration) {
   var status;
-  if (points == 1) {
-    if (submissionTime <= contestDuration) {
+  if (submission.verdict == "OK") {
+    if (submission.relativeTimeSeconds <= contestDuration) {
       status = Status.SOLVED;
     } else {
       status = Status.RESOLVED;
     }
   } else {
-    status = Status.UNRESOLVED;
+    status = null;
   }
 
   return status;
 }
 
-function getActualStatus(lastStatus, newStatus) {
-  if (lastStatus == null || lastStatus == Status.UNRESOLVED) {
-    return newStatus;
-  } else if (lastStatus == Status.SOLVED) {
-    return lastStatus; 
-  } else if (lastStatus == Status.RESOLVED) {
-    if (newSub == Status.SOLVED) {
-      return newStatus;
-    } else {
-      return lastStatus;
+
+function getContestSubmissions(contestId) {
+  var method = "contest.status";
+  var params = [["contestId", contestId], ["from", 1]];
+
+  return getContestData(method, params).result.reverse();
+}
+
+function getContestStandings(contestId) {
+  var method = "contest.standings";
+  var params = [["contestId", contestId], ["showUnofficial", "true"]];
+
+  return getContestData(method, params);
+}
+
+function getContestData(method, params) {
+  try {
+    var HTTPResponse = authorizedRequest(method, params);
+    var response = JSON.parse(HTTPResponse.getContentText());
+
+    if (response.status != "OK") {
+      throw new Error("Status of getting " + contestId + " contest isn't OK: " + response.status);
     }
+  } catch (e) {
+      throw new Error("Cannot send request method [" + method + "]: " + e);
   }
+
+  return response;
+}
+
+function getValuesByRangeName(spreadsheet, rangeName) {
+  var range, values;
+  try {
+    range = spreadsheet.getRangeByName(rangeName);
+    values = range.getValues();
+  } catch (err) {
+    throw new Error("Cannot find or access to named range " + rangeName + ": " + err);
+  }
+  return values.reduce((head, tail) => head.concat(tail)).filter(Boolean);
 }
 
 function authorizedRequest(method_name, params) {
+  var key = "xxx";
+  var secret = "yyy";
+
   var time = Math.floor(Date.now() / 1000);
   params.push(["apiKey", key]);
   params.push(["time", time]);
@@ -191,7 +239,9 @@ function authorizedRequest(method_name, params) {
 
   var request = "https://codeforces.com/api/" + method_name + "?" + authParams;
 
-  return UrlFetchApp.fetch(request);
+  // Logger.log(request);
+
+  return UrlFetchApp.fetch(request, {muteHttpExceptions: true });
 }
 
 function randFromTo(min, max) {
