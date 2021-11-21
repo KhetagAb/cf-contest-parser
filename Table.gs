@@ -1,10 +1,10 @@
 const CONTEST_TITLE = 3;
 const FIRST_CONTEST_ROW = 5;
-const FIRST_CONTEST_COLUMN = "H";
+const FIRST_CONTEST_COLUMN = "R";
 
 const TABLE_NAME = "Группа - 5 - export";
 
-const Status = { BONUS: 2, SOLVED: 1, RESOLVED: 0.99, REJECT: "-", WAITING: "?" };
+const Status = { SOLVED: 1, RESOLVED: 0.99, TRIED: 0, REJECT: "-", WAITING: "?" };
 
 const SUBMISSION_ID_RANGE = "SubmissionsId";
 const CONTEST_ID_RANGE = "ContestsId";
@@ -28,13 +28,15 @@ function getAllResults() {
   var contests = contestsWithReview.concat(contestsWithoutReview)
     .sort((a, b) => a.contest.startTimeSeconds - b.contest.startTimeSeconds).reverse();
 
+  var lastWeek = getTable(contests[0], handles).map(e => [e.reduce((a, b) => a + (typeof b == 'number' ? b : 0), 0)]);
+  
+  lastWeek.push([Utilities.formatDate(new Date(), "GMT+3", "HH:mm")])
+  SpreadsheetApp.getActive().getRangeByName(LAST_WEEK_RANGE).setValues(lastWeek);
+
   var pointerFrom = FIRST_CONTEST_COLUMN.charCodeAt(0) - "A".charCodeAt(0) + 1;
   for (var i = 0; i < contests.length; i++) {
     pointerFrom = displayContest(spreadsheet.getSheetByName(TABLE_NAME), contests[i], handles, pointerFrom);
   }
-  
-  var lastWeek = getTable(contests[0], handles).map(e => [e.reduce((a, b) => a + (typeof b == 'number' ? b : 0), 0)]);
-  SpreadsheetApp.getActive().getRangeByName(LAST_WEEK_RANGE).setValues(lastWeek);
 }
 
 function displayContest(sheet, contestEntity, handles, pointerFrom) {
@@ -65,7 +67,7 @@ function getTable(contestEntity, handles) {
   for (var i = 0; i < handles.length; i++) {
     var contestRow = contestRows.find(e => e.handle === handles[i]);
     if (contestRow === undefined) {
-      table.push(new Array(problems.length).fill("0"));
+      table.push(new Array(problems.length).fill(null));
     } else {
       table.push(contestRow.getSubmissions(review));
     }
@@ -174,7 +176,7 @@ class Contest {
         status = Status.RESOLVED;
       }
     } else {
-      status = null;
+      status = Status.TRIED;
     }
 
     return status;
@@ -196,18 +198,29 @@ function getContestStandings(contestId) {
 }
 
 function getContestData(method, params) {
+  var HTTPResponse;
   try {
-    var HTTPResponse = authorizedRequest(method, params);
-    var response = JSON.parse(HTTPResponse.getContentText());
-
-    if (response.status != "OK") {
-      throw new Error("Status of getting " + contestId + " contest isn't OK: " + response.status);
-    }
+    HTTPResponse = authorizedRequest(method, params);    
   } catch (e) {
-      throw new Error("Cannot send request method [" + method + "]: " + e);
+    throw new Error("Cannot send request method [" + method + "]: " + e);
   }
 
-  return response;
+  if (HTTPResponse.getResponseCode() === 200) {
+    var response;
+    try {
+      response = JSON.parse(HTTPResponse.getContentText());
+    } catch (e) {
+      throw new Error("Cannot parse to JSON: " + HTTPResponse.getContentText());
+    }
+
+    if (response.status !== "OK") {
+      throw new Error("Invalid response: codeforces status returned: " + response.status);
+    }
+
+    return response;
+  } else {
+    throw new Error("Http request failed with code: " + HTTPResponse.getResponseCode());
+  }
 }
 
 function getValuesByRangeName(spreadsheet, rangeName) {
@@ -237,8 +250,9 @@ function authorizedRequest(method_name, params) {
 
   var request = "https://codeforces.com/api/" + method_name + "?" + authParams;
 
-  // Logger.log(request);
+  Logger.log(request);
 
+  Utilities.sleep(200);
   return UrlFetchApp.fetch(request, {muteHttpExceptions: true });
 }
 
