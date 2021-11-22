@@ -1,10 +1,10 @@
 const CONTEST_TITLE = 3;
 const FIRST_CONTEST_ROW = 5;
-const FIRST_CONTEST_COLUMN = "J";
+const FIRST_CONTEST_COLUMN = "H";
 
 const TABLE_NAME = "Группа - 5 - export";
 
-const Verdict = { SOLVED: 1, RESOLVED: 0.99, TRIED: 0, REJECT: "-", WAITING: "?" };
+const Verdict = { SOLVED: 1, RESOLVED: 1, TRIED: 0, REJECT: "-", WAITING: "?", EXAM: 1.01 };
 
 const SUBMISSION_ID_RANGE = "SubmissionsId";
 const CONTEST_ID_RANGE = "ContestsId";
@@ -32,7 +32,7 @@ function getAllResults() {
   var contests = contestsExam.concat(contestsWithReview).concat(contestsWithoutReview)
     .sort((a, b) => a.contest.startTimeSeconds - b.contest.startTimeSeconds).reverse();
 
-  var lastWeek = getTable(contests[0], handles).map(e => [e.reduce((a, b) => a + (typeof b == 'number' ? b : 0), 0)]);
+  var lastWeek = getExamTable(contests, 0, handles).map(e => [e.reduce((a, b) => a + (typeof b == "number" ? b : 0), 0)]);
   lastWeek.push([Utilities.formatDate(new Date(), "GMT+3", "HH:mm")])
   SpreadsheetApp.getActive().getRangeByName(LAST_WEEK_RANGE).setValues(lastWeek);
 
@@ -89,13 +89,18 @@ function getExamTable(contests, contestIndex, handles) {
       contestColumn = foundContest.contest.getProblemColumn(handles, problem);
     }
 
-    if (problem.index === "XXX") {
-      Logger.log(contestColumn);
-      Logger.log(examContestColumn)
-    }
-
     for (var i = 0; i < handles.length; i++) {
-      var submission = chooseSubmission(contestColumn[i], examContestColumn[i]);
+      var lastSubmission = contestColumn[i];
+      var currentSubmission = examContestColumn[i];
+      var submission = lastSubmission;
+
+      if (lastSubmission == null || (lastSubmission.verdict != Verdict.SOLVED && lastSubmission.verdict != Verdict.REJECT)) {
+        if (currentSubmission != null && (currentSubmission.verdict == Verdict.SOLVED || currentSubmission.verdict == Verdict.EXAM)) {
+          submission = currentSubmission;
+          submission.verdict = Verdict.EXAM;
+        }
+      }
+
       if (submission == null) {
         table[i].push(null);
       } else  {
@@ -115,7 +120,7 @@ function getTable(contestEntity, handles) {
   var table = [];
   for (var i = 0; i < handles.length; i++) {
     var contestRow = contestRows.find(e => e.handle === handles[i]);
-    if (contestRow === undefined) {
+    if (contestRow == undefined) {
       table.push(new Array(problems.length).fill(null));
     } else {
       table.push(contestRow.getVerdicts(review));
@@ -136,16 +141,14 @@ class Problem {
 class ContestRow {
   constructor (contest, handle) {
     this.handle = handle;
-    this.contest = contest;
-    this.build();
+    this.build(contest);
   }
 
-  build() {
+  build(contest) {
     this.submissionsMap = {}
-    this.contest.problems.forEach(p => this.submissionsMap[p.index] = null);
+    contest.problems.forEach(p => this.submissionsMap[p.index] = null);
 
-    // toDo => sort?
-    var handleSubmissions = this.contest.submissions.filter(s => s.handle == this.handle);
+    var handleSubmissions = contest.submissions.filter(s => s.handle == this.handle);
     for (var j = 0; j < handleSubmissions.length; j++) {
       var submission = handleSubmissions[j];
       var problemIndex = submission.problem.index;
@@ -172,7 +175,7 @@ function chooseSubmission(currentSubmission, lastSubmission) {
   if (lastSubmission == null) {
     return currentSubmission;
   } else if (currentSubmission == null || currentSubmission.verdict != Verdict.SOLVED || 
-            lastSubmission.verdict === Verdict.REJECT) {
+            currentSubmission.verdict != Verdict.REJECT) {
     return lastSubmission;
   }
 }
@@ -180,7 +183,6 @@ function chooseSubmission(currentSubmission, lastSubmission) {
 class Submission {
   constructor (submissionData, contest, problem) {
     this.id = submissionData.id;
-    this.contest = contest;
     this.handle = submissionData.author.members[0].handle;
 
     this.problem = problem;
@@ -189,7 +191,7 @@ class Submission {
     if (submissionData.verdict == "SKIPPED" || submissionData.verdict == "REJECTED") {
       verdict = Verdict.REJECT;
     } else if (submissionData.verdict == "OK") {
-      if (submissionData.relativeTimeSeconds <= this.contest.durationSeconds) {
+      if (submissionData.relativeTimeSeconds <= contest.durationSeconds) {
         verdict = Verdict.SOLVED;
       } else {
         verdict = Verdict.RESOLVED;
@@ -242,8 +244,8 @@ class Contest {
     var column = []
     for (var i = 0; i < handles.length; i++) {
       var handle = handles[i];
-      var handleRow = this.contestRows.find(e => e.handle === handle);
-
+      var handleRow = this.contestRows.find(e => e.handle == handle);
+      
       if (handleRow == undefined) {
         column.push(null);
       } else {
@@ -313,8 +315,8 @@ function getValuesByRangeName(spreadsheet, rangeName) {
 }
 
 function authorizedRequest(method_name, params) {
-  var key = "XXX";
-  var secret = "YYY";
+  var key = "xxx";
+  var secret = "yyy";
 
   var time = Math.floor(Date.now() / 1000);
   var param = [...params];
