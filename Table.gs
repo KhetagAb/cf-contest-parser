@@ -1,22 +1,18 @@
 const CONTEST_TITLE = 3;
 const FIRST_CONTEST_ROW = 5;
-const FIRST_CONTEST_COLUMN = "H";
 
-const TABLE_NAME = "Группа - 5 - export";
+const Verdict = { SOLVED: 1, RESOLVED: 0.9, TRIED: 0, REJECT: "-", WAITING: "?" };
 
-const Verdict = { SOLVED: 1, RESOLVED: 1, TRIED: 0, REJECT: "-", WAITING: "?", EXAM: 1.01 };
+// Codeforces key/secret
+var key = "xxx";
+var secret = "yyy";
 
 const SUBMISSION_ID_RANGE = "SubmissionsId";
-const CONTEST_ID_RANGE = "ContestsId";
-const CONTEST_ID_REVIEW_RANGE = "ContestsIdReview";
-const CONTEST_ID_EXAM = "ContestsIdExam";
-const HANDLES_RANGE = "Handles";
-const LAST_WEEK_RANGE = "LastWeek"
+const reviewedSubmissionIds = getValuesByRangeName(SpreadsheetApp.getActiveSpreadsheet(), SUBMISSION_ID_RANGE);
 
-const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-const reviewedSubmissionIds = getValuesByRangeName(spreadsheet, SUBMISSION_ID_RANGE);
-
-function getAllResults() {
+function getAllResults(TABLE_NAME, CONTEST_ID_RANGE = "ContestsId", CONTEST_ID_REVIEW_RANGE = "ContestsIdReview", HANDLES_RANGE = "Handles", LAST_WEEK_RANGE = "LastWeek") {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  
   if (spreadsheet == null) {
     throw new Error("Cannot find spreadsheet.")
   }
@@ -26,20 +22,24 @@ function getAllResults() {
     .map(e => { return {contest: new Contest(e), review: false, exam: false}});
   var contestsWithReview = getValuesByRangeName(spreadsheet, CONTEST_ID_REVIEW_RANGE)
     .map(e => { return {contest: new Contest(e), review: true, exam: false}});
-  var contestsExam = getValuesByRangeName(spreadsheet, CONTEST_ID_EXAM)
-    .map(e => { return {contest: new Contest(e), review: false, exam: true}});
 
-  var contests = contestsExam.concat(contestsWithReview).concat(contestsWithoutReview)
+  var contests = contestsWithReview.concat(contestsWithoutReview)
     .sort((a, b) => a.contest.startTimeSeconds - b.contest.startTimeSeconds).reverse();
 
-  var lastWeek = getExamTable(contests, 0, handles).map(e => [e.reduce((a, b) => a + (typeof b == "number" ? b : 0), 0)]);
+  var lastWeek = getTable(contests[0], handles).map(e => [e.reduce((a, b) => a + (typeof b == "number" ? b : 0), 0)]);
   lastWeek.push([Utilities.formatDate(new Date(), "GMT+3", "HH:mm")])
-  SpreadsheetApp.getActive().getRangeByName(LAST_WEEK_RANGE).setValues(lastWeek);
 
-  var pointerFrom = FIRST_CONTEST_COLUMN.charCodeAt(0) - "A".charCodeAt(0) + 1;
+  var lastWeekRange = spreadsheet.getRangeByName(LAST_WEEK_RANGE);
+  lastWeekRange.setValues(lastWeek);
+  var columnPointer = lastWeekRange.getLastColumn() + 1;
+
   for (var i = 0; i < contests.length; i++) {
-    pointerFrom = displayContest(spreadsheet.getSheetByName(TABLE_NAME), contests, i, handles, pointerFrom);
+    columnPointer = displayContest(spreadsheet.getSheetByName(TABLE_NAME), contests, i, handles, columnPointer);
   }
+}
+
+function getColumnNumber(char) {
+  return char.charCodeAt(0) - "A".charCodeAt(0) + 1
 }
 
 function displayContest(sheet, contests, contestIndex, handles, pointerFrom) {
@@ -49,11 +49,7 @@ function displayContest(sheet, contests, contestIndex, handles, pointerFrom) {
   sheet.getRange(CONTEST_TITLE, pointerFrom, 1, problemsIndex.length).setValues([problemsIndex]);
   sheet.getRange(CONTEST_TITLE - 1, pointerFrom, 1, problemsIndex.length).breakApart().merge().setValue(contestEntity.contest.name);
 
-  if (contestEntity.exam) {
-    table = getExamTable(contests, contestIndex, handles);
-  } else {
-    table = getTable(contestEntity, handles);
-  }
+  table = getTable(contestEntity, handles);
 
   sheet.getRange(FIRST_CONTEST_ROW, pointerFrom, handles.length, problemsIndex.length)
     .setValues(table);
@@ -147,7 +143,7 @@ class ContestRow {
   build(contest) {
     this.submissionsMap = {}
     contest.problems.forEach(p => this.submissionsMap[p.index] = null);
-
+    
     var handleSubmissions = contest.submissions.filter(s => s.handle == this.handle);
     for (var j = 0; j < handleSubmissions.length; j++) {
       var submission = handleSubmissions[j];
@@ -172,11 +168,10 @@ class ContestRow {
 }
 
 function chooseSubmission(currentSubmission, lastSubmission) {
-  if (lastSubmission == null) {
-    return currentSubmission;
-  } else if (currentSubmission == null || currentSubmission.verdict != Verdict.SOLVED || 
-            currentSubmission.verdict != Verdict.REJECT) {
+  if (currentSubmission == null || (currentSubmission.verdict != Verdict.SOLVED && currentSubmission.verdict != Verdict.RESOLVED)) {
     return lastSubmission;
+  } else {
+    return currentSubmission;
   }
 }
 
@@ -304,9 +299,9 @@ function getContestData(method, params) {
 }
 
 function getValuesByRangeName(spreadsheet, rangeName) {
-  var range, values;
+  var values;
   try {
-    range = spreadsheet.getRangeByName(rangeName);
+    var range = spreadsheet.getRangeByName(rangeName);
     values = range.getValues();
   } catch (err) {
     throw new Error("Cannot find or access to named range " + rangeName + ": " + err);
@@ -315,9 +310,6 @@ function getValuesByRangeName(spreadsheet, rangeName) {
 }
 
 function authorizedRequest(method_name, params) {
-  var key = "xxx";
-  var secret = "yyy";
-
   var time = Math.floor(Date.now() / 1000);
   var param = [...params];
   param.push(["apiKey", key]);
