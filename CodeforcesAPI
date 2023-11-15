@@ -1,0 +1,40 @@
+function authorizedRequest(method_name, params) {
+  var scriptProperties = PropertiesService.getScriptProperties();
+  
+  var key = scriptProperties.getProperty("codeforcesKey")
+  var secret = scriptProperties.getProperty("codeforcesSecret")
+
+  var time = Math.floor(Date.now() / 1000);
+  var param = [...params];
+  param.push(["apiKey", key]);
+  param.push(["time", time]);
+
+  var rand = randFromTo(100000, 999999);
+  var apiSig = rand + sha512(rand + "/" + method_name + "?" + convertToAuthUriParms(param) + "#" + secret);
+  param.push(["apiSig", apiSig]);
+
+  authParams = convertToAuthUriParms(param);
+
+  var request = "https://codeforces.com/api/" + method_name + "?" + authParams;
+
+  return UrlFetchApp.fetch(request, {muteHttpExceptions: true });
+}
+
+function randFromTo(min, max) {
+  return Math.floor(Math.random() * (max - min + 1) + min);
+}
+
+function convertToAuthUriParms(params) {
+  return params.sort().map(e => encodeURIComponent(e[0]) + '=' + encodeURIComponent(e[1])).join('&');
+}
+
+function sha512(str) {
+  var signature = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_512, str);
+
+  return signature
+      .map(function(byte) {
+          var v = (byte < 0) ? 256 + byte : byte;
+          return ("0" + v.toString(16)).slice(-2);
+      })
+      .join("");
+}
