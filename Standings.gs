@@ -4,27 +4,62 @@ const CONTEST_TITLE = 3;
 const HANDLES_RANGE = "Handles";
 const CONTEST_ID_RANGE = "ContestsId";
 const CONTEST_ID_REVIEW_RANGE = "ContestsIdReview";
-const LAST_WEEK_RANGE = "LastWeek";
+const STANDINGS_BEGIN_COLUMN_RANGE = "StandingsColumnBegin";
 const STANDINGS_LAST_COLUMN_END_RANGE = "StandingsColumnEnd";
 
-const VERDICT = { STARED: "🥹", SOLVED: 1, RESOLVED: 0.99, TRIED: 0, REJECT: "-", WAITING: "?" };
+const bannedSubs = [233396647, 233397755];
+const whiteListSubs = [233355044]
+
+function checkCreationTimeConstraintForBan(submissionData) {
+  if (bannedSubs.includes(submissionData.id)) {
+    return true;
+  } else if (whiteListSubs.includes(submissionData.id)) {
+    return false;
+  }
+  var date = new Date(submissionData.creationTimeSeconds * 1000);
+  var hours = date.getHours();
+  var minutes = date.getMinutes();
+
+  if (((hours < 17 && (16 <= hours || (hours == 15 && 35 <= minutes))) || 23 <= hours || hours < 6)) {
+    console.log("Banned submission " + submissionData.problem.index + " with ID " + submissionData.id + ": " + hours + ":" + minutes)
+    return true;
+  } else {
+    return false
+  }
+}
+
+const VERDICT = { STARED: "❤️ 1", SOLVED: 1, RESOLVED: 0.99, TRIED: 0, REJECT: "RJ", WAITING: "?", BANNED: "BAN" };
 
 const SUBMISSIONS_SHEET_NAME = "submissions"
 const STARS_SHEET_NAME = "stars"
 
 function displayAllStandings() {
-  // displayStandings("Группа - 1 - export");
-  // displayStandings("Группа - 2 - export");
+  displayStandings("Группа - 1 - export");
+  displayStandings("Группа - 2 - export");
   displayStandings("Группа - 3 - export");
-  //displayStandings("Группа - 4 - export");
+  displayStandings("Группа - 4 - export");
 }
 
-// approve submission
+const reviewedSubmissionIds = getSubmissionIds(SUBMISSIONS_SHEET_NAME)
+const staredSubmissionIds = getSubmissionIds(STARS_SHEET_NAME)
+
+// approve/get submission
 function doGet(request) {
-    const submissionId = request["parameter"]["value"]
     const type = request["parameter"]["type"]
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(type == "star" ? starsSheet : SUBMISSIONS_SHEET_NAME);
-    sheet.appendRow([submissionId]);
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(type == "star" ? STARS_SHEET_NAME : SUBMISSIONS_SHEET_NAME);
+    if (type == 'get') {
+      const values = sheet.getRange("A1:A").getValues().reduce((head, tail) => head.concat(tail)).filter(Boolean)
+      values.shift();
+      return ContentService.createTextOutput(JSON.stringify(values))
+        .setMimeType(ContentService.MimeType.JSON);;
+    } else {
+      const submissionId = request["parameter"]["value"]
+      sheet.appendRow([submissionId]);
+    }
+}
+
+function getSubmissionIds(sheetName) {
+   return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName).getRange("A:A").getValues().reduce((head, tail) => head.concat(tail)).filter(Boolean)
 }
 
 function displayStandings(tableName) {
@@ -36,53 +71,48 @@ function displayStandings(tableName) {
   }
 
   var handles = getValuesByRangeName(spreadsheet, tableName, HANDLES_RANGE);
-  var contestsWithoutReview = getValuesByRangeName(spreadsheet, tableName, CONTEST_ID_RANGE)
-    .map(e => { return {contest: new Contest(e), review: false, exam: false}});
-  var contestsWithReview = getValuesByRangeName(spreadsheet, tableName, CONTEST_ID_REVIEW_RANGE)
-    .map(e => { return {contest: new Contest(e), review: true, exam: false}});
+  var contests = getValuesByRangeName(spreadsheet, tableName, CONTEST_ID_RANGE);
 
-  var contests = contestsWithReview.concat(contestsWithoutReview)
-    .sort((a, b) => a.contest.startTimeSeconds - b.contest.startTimeSeconds).reverse();
+  var slice = contests.at(-1)
+  if (slice < 0) {
+    contests.pop();
+    contests = contests.slice(slice);
+  }
+
+  var contestIdsToReview = getValuesByRangeName(spreadsheet, tableName, CONTEST_ID_REVIEW_RANGE);
+  contests = contests.map(e => { 
+    return {contest: new Contest(e), review: contestIdsToReview.includes(e), exam: false}
+  });
+  var contests = contests.sort((a, b) => a.contest.startTimeSeconds - b.contest.startTimeSeconds).reverse();
 
   Logger.log("There are " + contests.length + " contests.");
 
   var standingsBeginRow = getNamedRange(spreadsheet, tableName, HANDLES_RANGE).getRow()
-  var standingsBeginColumn = displayLastWeek(spreadsheet, tableName, contests, handles) + 1;
+  var standingsBeginColumn = getNamedRange(spreadsheet, tableName, STANDINGS_BEGIN_COLUMN_RANGE).getColumn();
   var standingsEndColumn = getNamedRange(spreadsheet, tableName, STANDINGS_LAST_COLUMN_END_RANGE).getColumn();
 
   var sheet = spreadsheet.getSheetByName(tableName)
-
   wellFormStandingRange(sheet, contests, standingsBeginColumn, standingsEndColumn)
 
   var standingsColumnPointer = standingsBeginColumn;
+
   for (var i = 0; i < contests.length; i++) {
     standingsColumnPointer = displayContest(sheet, contests, i, handles, standingsBeginRow, standingsColumnPointer);
   }
 }
 
-function verdictCellToNumber(verdict) {
-  if (typeof verdict == "number") {
-    return verdict;
-  } else if (verdict == VERDICT.STARED || verdict == VERDICT.WAITING) {
-    return 1;
-  } else {
-    return 0;
-  }
-}
-
-function displayLastWeek(spreadsheet, tableName, contests, handles) {
-  Logger.log("Filling last week");
-  const lastContest = getTable(contests[0], handles)
-  var lastWeek = lastContest.map(e => [e.reduce((a, b) => a + verdictCellToNumber(b), 0)]);
-  lastWeek.push([Utilities.formatDate(new Date(), "GMT+3", "HH:mm")])
-  var lastWeekRange = getNamedRange(spreadsheet, tableName, LAST_WEEK_RANGE);
-  lastWeekRange.setValues(lastWeek);
-  return lastWeekRange.getColumn()
+function contestSummary(contest, handles) {
+  const contestTable = getTable(contest, handles)
+  return contestTable.map(e => {
+    const solved = e.reduce((a, b) => a + (b == VERDICT.STARED || b == VERDICT.SOLVED ? 1 : 0) , 0)
+    const resolved = e.reduce((a, b) => a + (b == VERDICT.RESOLVED ? 1 : 0) , 0)
+    return [solved, resolved];
+  });
 }
 
 function wellFormStandingRange(sheet, contests, standingsBeginColumn, standingsEndColumn) {
   Logger.log("Preparing standings area for displaying contests");
-  var allProblemsCount = contests.map(c => c.contest.problems.length).reduce((a, b) => a + b); 
+  var allProblemsCount = contests.map(c => c.contest.problems.length).reduce((a, b) => a + b) + 2 * contests.length; 
   var allColumnsCount = (standingsEndColumn - standingsBeginColumn)
   var columnsToAdd = allProblemsCount - allColumnsCount
   if (columnsToAdd > 0) {
@@ -90,8 +120,8 @@ function wellFormStandingRange(sheet, contests, standingsBeginColumn, standingsE
   } else if (columnsToAdd < 0) {
     sheet.deleteColumns(standingsEndColumn + columnsToAdd, -columnsToAdd);
   }
-  Logger.log(allColumnsCount + " columns presented, and " + allProblemsCount + " needed for standings")
-  sheet.getRange(CONTEST_TITLE - 1, standingsBeginColumn, 1, Math.max(allProblemsCount, allColumnsCount)).breakApart();
+  Logger.log(allColumnsCount + " columns presented, and " + allProblemsCount + " needed for standings");
+  sheet.getRange(CONTEST_TITLE - 1, standingsBeginColumn, 1, allColumnsCount).breakApart();
 }
 
 function displayContest(sheet, contests, contestIndex, handles, standingsRowIndex, pointerFrom) {
@@ -99,9 +129,15 @@ function displayContest(sheet, contests, contestIndex, handles, standingsRowInde
   var contestEntity = contests[contestIndex];
   var problemsIndex = contestEntity.contest.problems.map(e => e.index);
 
-  sheet.getRange(CONTEST_TITLE, pointerFrom, 1, problemsIndex.length).setValues([problemsIndex]);
-  sheet.getRange(CONTEST_TITLE - 1, pointerFrom, 1, problemsIndex.length).merge().setValue(contestEntity.contest.name);
+  var summaryRange = sheet.getRange(standingsRowIndex, pointerFrom, handles.length, 2);
+  summaryRange.setValues(contestSummary(contestEntity, handles));
+  summaryRange
+    .setBorder(null, null, null, true, false, false, "black", SpreadsheetApp.BorderStyle.DOUBLE);
 
+  sheet.getRange(CONTEST_TITLE, pointerFrom, 1, problemsIndex.length + 2).setValues([['Σ', "Σ'", ...problemsIndex]]);
+  sheet.getRange(CONTEST_TITLE - 1, pointerFrom, 1, problemsIndex.length + 2).merge().setValue(contestEntity.contest.name);
+
+  pointerFrom += 2;
   var table = getTable(contestEntity, handles);
 
   sheet.getRange(standingsRowIndex, pointerFrom, handles.length, problemsIndex.length)
@@ -175,15 +211,14 @@ class ContestRow {
 }
 
 function chooseSubmission(currentSubmission, lastSubmission) {
-  if (currentSubmission == null || (currentSubmission.VERDICT != VERDICT.SOLVED && currentSubmission.VERDICT != VERDICT.RESOLVED)) {
-    return lastSubmission;
+  if (currentSubmission == null) {
+    return lastSubmission
+  } else if (currentSubmission.verdict == VERDICT.BANNED || currentSubmission.verdict == VERDICT.STARED || currentSubmission.verdict == VERDICT.SOLVED || currentSubmission.verdict == VERDICT.RESOLVED) {
+    return currentSubmission
   } else {
-    return currentSubmission;
+    return lastSubmission;
   }
 }
-
-const reviewedSubmissionIds = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SUBMISSIONS_SHEET_NAME).getRange("A:A").getValues().reduce((head, tail) => head.concat(tail)).filter(Boolean)
-const staredSubmissionIds = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(STARS_SHEET_NAME).getRange("A:A").getValues().reduce((head, tail) => head.concat(tail)).filter(Boolean)
 
 class Submission {
   constructor (submissionData, contest, problem) {
@@ -193,7 +228,9 @@ class Submission {
     this.problem = problem;
     
     var verdict;
-    if (submissionData.verdict == "SKIPPED" || submissionData.verdict == "REJECTED") {
+    if (checkCreationTimeConstraintForBan(submissionData)) {
+      verdict = VERDICT.BANNED;
+    } else if (submissionData.verdict == "SKIPPED" || submissionData.verdict == "REJECTED") {
       verdict = VERDICT.REJECT;
     } else if (submissionData.verdict == "OK") {
       if (staredSubmissionIds.includes(submissionData.id)) {
